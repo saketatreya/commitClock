@@ -7,8 +7,8 @@ DATA_DIR = BASE_DIR / "data"
 
 # Model Configuration
 # For local testing, smaller models are tractable.
-# Changed to Qwen3.5-9B per user request for final run on Kaggle/Cloud
-MODEL_NAME = "Qwen/Qwen3.5-9B"
+# Use Qwen2.5-7B-Instruct for the final run on Kaggle/Cloud
+MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 
 # Extraction configuration
 NUM_FRACTIONAL_POSITIONS = 10
