@@ -38,9 +38,19 @@ def run_phase5(limit=None):
     # Causal effect: log_prob(correct_answer | patched) - log_prob(correct_answer | clean cond1)
     
     results = []
+    checkpoint_path = PHASE5_OUT_DIR / "causal_patching.pkl"
+    if checkpoint_path.exists():
+        print(f"Found checkpoint at {checkpoint_path}, loading...")
+        with open(checkpoint_path, "rb") as f:
+            results = pickle.load(f)
+        print(f"Resuming with {len(results)} previously processed examples.")
+    processed_qids = {r['question_id'] for r in results}
     
     for item in tqdm(data, desc="Causal Patching"):
         q_id = item['question_id']
+        if q_id in processed_qids:
+            continue
+            
         correct_label = item['correct_label']
         
         cond1_tokens = get_pre_answer_tokens(model, item['cond1'])
@@ -97,7 +107,11 @@ def run_phase5(limit=None):
             "effects": layer_effects
         })
         
-    with open(PHASE5_OUT_DIR / "causal_patching.pkl", "wb") as f:
+        if len(results) % 50 == 0:
+            with open(checkpoint_path, "wb") as f:
+                pickle.dump(results, f)
+        
+    with open(checkpoint_path, "wb") as f:
         pickle.dump(results, f)
         
     # Plot average effect

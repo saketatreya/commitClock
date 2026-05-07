@@ -64,9 +64,19 @@ def run_phase1_strategyqa(limit=None):
     num_layers = model.cfg.n_layers
     
     results = []
+    checkpoint_path = PHASE1_OUT_DIR / "strategyqa_activations.pkl"
+    if checkpoint_path.exists():
+        print(f"Found checkpoint at {checkpoint_path}, loading...")
+        with open(checkpoint_path, "rb") as f:
+            results = pickle.load(f)
+        print(f"Resuming with {len(results)} previously processed examples.")
+    processed_qids = {r['question_id'] for r in results}
     
     # For StrategyQA, ground truth is boolean
     for idx, item in enumerate(tqdm(dataset, desc="Phase 1: Free Generation")):
+        if item['qid'] in processed_qids:
+            continue
+            
         question = item['question']
         correct_answer = 1 if item['answer'] else 0
         

@@ -66,9 +66,19 @@ def run_phase4(limit=None):
     num_layers = model.cfg.n_layers
     
     results = []
+    checkpoint_path = PHASE4_OUT_DIR / "forced_activations.pkl"
+    if checkpoint_path.exists():
+        print(f"Found checkpoint at {checkpoint_path}, loading...")
+        with open(checkpoint_path, "rb") as f:
+            results = pickle.load(f)
+        print(f"Resuming with {len(results)} previously processed examples.")
+    processed_qids = {r['question_id'] for r in results}
     
     for item in tqdm(data, desc="Extracting Forced Branch Activations"):
         q_id = item['question_id']
+        if q_id in processed_qids:
+            continue
+            
         correct_label = item['correct_label']
         
         act1 = extract_pre_answer_activations(model, item['cond1'], num_layers)
@@ -89,7 +99,11 @@ def run_phase4(limit=None):
         }
         results.append(record)
         
-    with open(PHASE4_OUT_DIR / "forced_activations.pkl", "wb") as f:
+        if len(results) % 50 == 0:
+            with open(checkpoint_path, "wb") as f:
+                pickle.dump(results, f)
+        
+    with open(checkpoint_path, "wb") as f:
         pickle.dump(results, f)
         
     print(f"Phase 4 complete. Extracted for {len(results)} questions.")
