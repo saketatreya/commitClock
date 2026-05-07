@@ -66,14 +66,18 @@ def generate_texts_fast(dataset, limit=None):
         torch_dtype=torch.bfloat16
     )
     
+    tokenizer.padding_side = "left" # Crucial for batched generation
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     generated_data = []
+    batch_size = 16
     
-    for idx, item in enumerate(tqdm(dataset, desc="Generating")):
-        question = item['question']
-        correct_answer = 1 if item['answer'] else 0
-        prompt = format_strategyqa_prompt(question)
+    for i in tqdm(range(0, len(dataset), batch_size), desc="Generating in Batches"):
+        batch = dataset[i:i+batch_size]
+        prompts = [format_strategyqa_prompt(q) for q in batch['question']]
         
-        inputs = tokenizer(prompt, return_tensors="pt").to(hf_model.device)
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(hf_model.device)
         
         with torch.no_grad():
             outputs = hf_model.generate(
@@ -84,17 +88,19 @@ def generate_texts_fast(dataset, limit=None):
                 pad_token_id=tokenizer.eos_token_id
             )
             
-        output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        model_answer = parse_strategyqa_answer(output_text)
+        output_texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         
-        if model_answer != -1:
-            generated_data.append({
-                "question_id": item['qid'],
-                "correct_label": correct_answer,
-                "model_answer": model_answer,
-                "generated_text": output_text,
-                "prompt": prompt
-            })
+        for j in range(len(prompts)):
+            model_answer = parse_strategyqa_answer(output_texts[j])
+            correct_answer = 1 if batch['answer'][j] else 0
+            if model_answer != -1:
+                generated_data.append({
+                    "question_id": batch['qid'][j],
+                    "correct_label": correct_answer,
+                    "model_answer": model_answer,
+                    "generated_text": output_texts[j],
+                    "prompt": prompts[j]
+                })
             
     with open(generated_path, "wb") as f:
         pickle.dump(generated_data, f)
