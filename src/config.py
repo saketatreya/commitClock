@@ -6,9 +6,9 @@ BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
 
 # Model Configuration
-# For local testing, 1.5B is much more tractable.
-# Change to "Qwen/Qwen2.5-7B-Instruct" for the full run.
-MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+# For local testing, smaller models are tractable.
+# Changed to Qwen3.5-9B per user request for final run on Kaggle/Cloud
+MODEL_NAME = "Qwen/Qwen3.5-9B"
 
 # Extraction configuration
 NUM_FRACTIONAL_POSITIONS = 10
