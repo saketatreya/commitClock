@@ -19,6 +19,7 @@ def load_model(model_name: str = MODEL_NAME, device: str = None) -> HookedTransf
         fold_ln=False,
         center_writing_weights=False,
         center_unembed=False,
+        default_prepend_bos=False,
         dtype=torch.float16 if device == "mps" else torch.bfloat16
     )
     return model

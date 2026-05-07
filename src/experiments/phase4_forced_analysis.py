@@ -28,7 +28,7 @@ def extract_pre_answer_activations(model, text: str, num_layers: int):
     # Keep everything up to and including "so the answer is "
     text_before_ans = text[:idx + len("so the answer is ")]
     
-    tokens = model.to_tokens(text_before_ans, prepend_bos=True)
+    tokens = model.to_tokens(text_before_ans, prepend_bos=False)
     
     # We want the activation at the LAST token of this sequence.
     last_token_idx = tokens.shape[1] - 1

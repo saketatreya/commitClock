@@ -21,7 +21,7 @@ def get_pre_answer_tokens(model, text: str):
     if idx == -1:
         return None
     text_before_ans = text[:idx + len("so the answer is ")]
-    return model.to_tokens(text_before_ans, prepend_bos=True)
+    return model.to_tokens(text_before_ans, prepend_bos=False)
 
 def run_phase5(limit=None):
     data = load_forced_branches()

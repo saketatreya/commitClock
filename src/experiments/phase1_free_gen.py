@@ -125,10 +125,10 @@ def run_phase1_strategyqa(limit=None):
         answer_token_idx = len(tokens_before)
         
         # Now we extract activations
-        prompt_tokens = model.to_tokens(prompt, prepend_bos=True)
+        prompt_tokens = model.to_tokens(prompt, prepend_bos=False)
         # Re-run forward pass with the *full* generated sequence up to the answer token
         
-        full_tokens = model.to_tokens(text_before_answer + (" Yes" if model_answer == 1 else " No"), prepend_bos=True)
+        full_tokens = model.to_tokens(text_before_answer + (" Yes" if model_answer == 1 else " No"), prepend_bos=False)
         
         positions, activations = extract_activations_for_prompt(
             model, full_tokens, answer_token_idx, num_layers
