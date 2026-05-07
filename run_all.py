@@ -1,6 +1,10 @@
 import argparse
 import time
 import sys
+import os
+
+# Add the project root to sys.path to avoid ModuleNotFoundError when running in environments like Colab
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.experiments.phase1_free_gen import run_phase1_strategyqa
 from src.experiments.phase2_probe import run_phase2
