@@ -82,6 +82,8 @@ def run_phase1_strategyqa(limit=None):
         
         prompt = format_strategyqa_prompt(question)
         
+        print(f"\n[Question {idx+1}/{len(dataset)}] Generating reasoning chain...")
+        
         # Free generation
         # We need to find "So the answer is Yes." or similar.
         # Generate with a reasonable max_new_tokens
