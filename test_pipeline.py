@@ -204,8 +204,22 @@ def validate_phase1():
         if gen:
             keys = sorted(gen[0].keys())
             print(f"  gen[0] keys: {keys}")
-            print(f"  gen[0].generated_text (first 280 chars):")
-            print(f"    {gen[0]['generated_text'][:280]!r}")
+            parsed = sum(1 for g in gen if g.get('model_answer', -1) != -1)
+            print(f"  parsed (model_answer != -1): {parsed}/{len(gen)} "
+                  f"({parsed / max(1, len(gen)):.0%})")
+            n_dump = min(3, len(gen))
+            print(f"  --- first {n_dump} raw generated_text samples ---")
+            for i, g in enumerate(gen[:n_dump]):
+                print(f"  [gen[{i}]] qid={g.get('question_id')} "
+                      f"model_answer={g.get('model_answer')} "
+                      f"correct_label={g.get('correct_label')} "
+                      f"prompt_len={g.get('prompt_len')}")
+                print(f"    prompt    : {g['prompt']!r}")
+                print(f"    generated : {g['generated_text'][:600]!r}")
+                # If we have token_ids saved, show counts
+                if 'token_ids' in g:
+                    tid = g['token_ids']
+                    print(f"    token_ids : len={len(tid) if hasattr(tid, '__len__') else tid.shape[0]}")
 
     if not p_acts.exists():
         print("  No activations pickle; aborting deeper validation.")

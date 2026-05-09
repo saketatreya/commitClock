@@ -58,8 +58,9 @@ def _generate(hf_model, tokenizer, dataset, batch_size: int = 16):
         for j in range(len(prompts)):
             model_answer = parse_strategyqa_answer(output_texts[j])
             correct_answer = 1 if batch['answer'][j] else 0
-            if model_answer == -1:
-                continue
+            # Save every record, even parse failures (model_answer == -1), so we can
+            # inspect raw outputs if the regex misses. Extraction filters them out
+            # later via the "so the answer is" rfind check.
             generated_data.append({
                 "question_id": batch['qid'][j],
                 "correct_label": correct_answer,
@@ -69,6 +70,16 @@ def _generate(hf_model, tokenizer, dataset, batch_size: int = 16):
                 "prompt_len": int(prompt_lens[j]),
                 "token_ids": generated_ids[j].cpu(),
             })
+
+    n_parsed = sum(1 for g in generated_data if g['model_answer'] != -1)
+    print(f"  Parse success: {n_parsed}/{len(generated_data)} "
+          f"({n_parsed / max(1, len(generated_data)):.0%})")
+    if n_parsed == 0 and generated_data:
+        print("  WARNING: 0 outputs matched 'so the answer is yes/no'. Sample outputs:")
+        for g in generated_data[:3]:
+            print(f"  --- qid={g['question_id']} ---")
+            print(f"    prompt    : {g['prompt']!r}")
+            print(f"    generated : {g['generated_text'][:600]!r}")
 
     with open(generated_path, "wb") as f:
         pickle.dump(generated_data, f)
