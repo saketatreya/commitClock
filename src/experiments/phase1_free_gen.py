@@ -41,7 +41,7 @@ def _generate(hf_model, tokenizer, dataset, batch_size: int = 16):
         with torch.no_grad():
             outputs = hf_model.generate(
                 **inputs,
-                max_new_tokens=300,
+                max_new_tokens=512,
                 do_sample=False,
                 pad_token_id=tokenizer.eos_token_id,
                 stop_strings=stop_strings,
@@ -56,7 +56,12 @@ def _generate(hf_model, tokenizer, dataset, batch_size: int = 16):
         output_texts = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
 
         for j in range(len(prompts)):
-            model_answer = parse_strategyqa_answer(output_texts[j])
+            # Parse only the model's continuation; the few-shot prompt itself
+            # contains 'So the answer is Yes/No' lines that would otherwise be
+            # picked up by parse_strategyqa_answer's rfind.
+            text = output_texts[j]
+            generated_only = text[len(prompts[j]):] if text.startswith(prompts[j]) else text
+            model_answer = parse_strategyqa_answer(generated_only)
             correct_answer = 1 if batch['answer'][j] else 0
             # Save every record, even parse failures (model_answer == -1), so we can
             # inspect raw outputs if the regex misses. Extraction filters them out
