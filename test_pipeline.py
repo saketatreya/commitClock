@@ -92,14 +92,18 @@ def gc_and_empty():
 def array_stats(name, arr):
     if not isinstance(arr, np.ndarray):
         arr = np.asarray(arr)
+    orig_dtype = arr.dtype
     n_nan = int(np.isnan(arr).sum()) if np.issubdtype(arr.dtype, np.floating) else 0
     n_inf = int(np.isinf(arr).sum()) if np.issubdtype(arr.dtype, np.floating) else 0
-    finite = arr[np.isfinite(arr)] if np.issubdtype(arr.dtype, np.floating) else arr
+    # Cast to fp32 for stats — fp16 std overflows on (x-mean)^2 for residual-stream
+    # magnitudes (~100+) since 100^2 = 10000 sum-squared overflows fast in fp16.
+    arr32 = arr.astype(np.float32, copy=False) if np.issubdtype(arr.dtype, np.floating) else arr
+    finite = arr32[np.isfinite(arr32)] if np.issubdtype(arr32.dtype, np.floating) else arr32
     if finite.size == 0:
-        print(f"  {name}: shape={arr.shape} dtype={arr.dtype} (empty / no finite values)")
+        print(f"  {name}: shape={arr.shape} dtype={orig_dtype} (empty / no finite values)")
         return
     print(
-        f"  {name}: shape={arr.shape} dtype={arr.dtype} "
+        f"  {name}: shape={arr.shape} dtype={orig_dtype} "
         f"nan={n_nan} inf={n_inf} "
         f"min={float(finite.min()):.4f} max={float(finite.max()):.4f} "
         f"mean={float(finite.mean()):.4f} std={float(finite.std()):.4f}"
@@ -207,19 +211,25 @@ def validate_phase1():
             parsed = sum(1 for g in gen if g.get('model_answer', -1) != -1)
             print(f"  parsed (model_answer != -1): {parsed}/{len(gen)} "
                   f"({parsed / max(1, len(gen)):.0%})")
-            n_dump = min(3, len(gen))
-            print(f"  --- first {n_dump} raw generated_text samples ---")
-            for i, g in enumerate(gen[:n_dump]):
+            # Show ALL records' continuations (not the few-shot prompt prefix)
+            # so failed-parse cases are debuggable.
+            print(f"  --- {len(gen)} model continuations (text after prompt) ---")
+            for i, g in enumerate(gen):
+                cont = g['generated_text']
+                if cont.startswith(g['prompt']):
+                    cont = cont[len(g['prompt']):]
+                tid_len = len(g['token_ids']) if hasattr(g.get('token_ids'), '__len__') else (
+                    g['token_ids'].shape[0] if 'token_ids' in g else None
+                )
                 print(f"  [gen[{i}]] qid={g.get('question_id')} "
                       f"model_answer={g.get('model_answer')} "
                       f"correct_label={g.get('correct_label')} "
-                      f"prompt_len={g.get('prompt_len')}")
-                print(f"    prompt    : {g['prompt']!r}")
-                print(f"    generated : {g['generated_text'][:600]!r}")
-                # If we have token_ids saved, show counts
-                if 'token_ids' in g:
-                    tid = g['token_ids']
-                    print(f"    token_ids : len={len(tid) if hasattr(tid, '__len__') else tid.shape[0]}")
+                      f"prompt_len={g.get('prompt_len')} "
+                      f"token_ids_len={tid_len}")
+                # Last ~100 chars of prompt (so we know which question was asked) +
+                # first ~800 chars of model continuation.
+                print(f"    question : ...{g['prompt'][-100:]!r}")
+                print(f"    cont[:800]: {cont[:800]!r}")
 
     if not p_acts.exists():
         print("  No activations pickle; aborting deeper validation.")
@@ -459,12 +469,14 @@ def main():
                     help="StrategyQA examples per phase (default: 8)")
     ap.add_argument("--fresh", action="store_true",
                     help="Delete all data/phase*/* before running")
-    ap.add_argument("--no-sanity", action="store_true",
-                    help="Skip HF-vs-TL numerical sanity check (saves time)")
+    ap.add_argument("--sanity", action="store_true",
+                    help="Run HF-vs-TL numerical sanity check inline. "
+                         "OFF by default because loading both 7B copies in one "
+                         "process can OOM 2x T4. Use test_sanity.py standalone instead.")
     args = ap.parse_args()
 
     log_header(f"COMMITCLOCK PIPELINE TEST  (limit={args.limit}  fresh={args.fresh}  "
-               f"sanity={'no' if args.no_sanity else 'yes'})")
+               f"sanity={'yes' if args.sanity else 'no (run test_sanity.py separately)'})")
 
     env_dump()
     if args.fresh:
@@ -489,7 +501,7 @@ def main():
     except Exception:
         print(traceback.format_exc())
 
-    if not args.no_sanity:
+    if args.sanity:
         try:
             numerical_sanity_check()
         except Exception:
