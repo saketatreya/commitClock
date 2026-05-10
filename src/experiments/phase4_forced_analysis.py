@@ -57,7 +57,7 @@ def _extract_last_token_acts_batched(hf_model, tokenizer, texts, num_layers):
     return results_np
 
 
-def run_phase4(limit=None, batch_size: int = 16):
+def run_phase4(limit=None, batch_size: int = 8):
     data = load_forced_branches()
     if not data:
         return
@@ -71,16 +71,23 @@ def run_phase4(limit=None, batch_size: int = 16):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Explicit per-device memory caps. Without this, accelerate's "balanced"
+    # heuristic still packs cuda:0 (where lm_head + embeddings live) close to
+    # capacity and OOMs on the first forward when activations land. Leaving
+    # 4-5 GB free on each GPU for activations + KV cache works on Kaggle T4.
     hf_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        # "balanced" forces an even split across all visible GPUs. With "auto"
-        # + low_cpu_mem_usage HF was packing as much as possible onto cuda:0
-        # and offloading the rest to CPU, OOM-ing on the first forward when
-        # activations + KV cache pushed cuda:0 past 16 GB.
         device_map="balanced",
+        max_memory={0: "11GiB", 1: "13GiB", "cpu": "20GiB"},
         torch_dtype=torch.float16,
         attn_implementation="sdpa",
     ).eval()
+    # Diagnostic: where did the weights actually land?
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            print(f"  [phase4] cuda:{i} after load: "
+                  f"alloc={torch.cuda.memory_allocated(i)/1e9:.2f}GB  "
+                  f"reserved={torch.cuda.memory_reserved(i)/1e9:.2f}GB", flush=True)
     num_layers = hf_model.config.num_hidden_layers
 
     results = []

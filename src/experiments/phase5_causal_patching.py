@@ -177,13 +177,14 @@ def run_phase5(limit=None, batch_size: int = 4):
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # See Phase 4 for the device_map rationale and the explicit max_memory
+    # caps — without them accelerate packs cuda:0 (where lm_head sits) and
+    # OOMs on first forward.
     hf_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=torch.float16,
-        # See Phase 4 for the rationale — "balanced" forces an even split
-        # across both T4s, while "auto" + low_cpu_mem_usage packs cuda:0 to
-        # capacity and CPU-offloads the rest, causing OOM on first forward.
         device_map="balanced",
+        max_memory={0: "11GiB", 1: "13GiB", "cpu": "20GiB"},
         attn_implementation="sdpa",
         low_cpu_mem_usage=True,
     ).eval()
