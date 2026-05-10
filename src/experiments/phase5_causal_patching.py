@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 from src.config import PHASE3_OUT_DIR, PHASE5_OUT_DIR
 from src.models.loader import load_model
+from src.data.loader import ANSWER_TRIGGER_RE
 
 
 def load_forced_branches():
@@ -19,10 +20,10 @@ def load_forced_branches():
 
 
 def _pre_answer_text(text: str):
-    idx = text.lower().rfind("so the answer is")
-    if idx == -1:
+    matches = list(ANSWER_TRIGGER_RE.finditer(text))
+    if not matches:
         return None
-    return text[:idx + len("so the answer is ")]
+    return text[:matches[-1].start(1)]
 
 
 def _resolve_target_token_id(model, correct_label: int):
@@ -45,7 +46,7 @@ def _left_pad_batch(tokenizer, texts, device):
     return input_ids, attn, last_idx
 
 
-def run_phase5(limit=None, batch_size: int = 8):
+def run_phase5(limit=None, batch_size: int = 4):
     data = load_forced_branches()
     if not data:
         return
@@ -145,7 +146,9 @@ def run_phase5(limit=None, batch_size: int = 8):
                 patched_target_lp = patched_lp_full[row_idx, target_ids]  # [B]
             per_layer_effect[:, l] = (patched_target_lp - clean_target_lp).cpu()
 
-        del cache_c3, clean_logits
+        del cache_c3, clean_logits, cond1_ids, cond1_attn, cond3_ids, cond3_attn
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         for b, item in enumerate(batch):
             results.append({

@@ -4,6 +4,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.config import MODEL_NAME, PHASE3_OUT_DIR, PHASE4_OUT_DIR
+from src.data.loader import ANSWER_TRIGGER_RE
 
 
 def load_forced_branches():
@@ -17,11 +18,12 @@ def load_forced_branches():
 
 
 def _trim_to_pre_answer(text: str):
-    """Returns the prefix up to and including 'so the answer is ', or None if not found."""
-    idx = text.lower().rfind("so the answer is")
-    if idx == -1:
+    """Returns the prefix up to (but not including) the 'yes'/'no' answer token,
+    matching any accepted trigger variant. Returns None if no trigger found."""
+    matches = list(ANSWER_TRIGGER_RE.finditer(text))
+    if not matches:
         return None
-    return text[:idx + len("so the answer is ")]
+    return text[:matches[-1].start(1)]
 
 
 def _extract_last_token_acts_batched(hf_model, tokenizer, texts, num_layers):

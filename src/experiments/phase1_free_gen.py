@@ -6,7 +6,10 @@ from typing import List
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.config import MODEL_NAME, PHASE1_OUT_DIR, MIN_CHAIN_LENGTH, MAX_CHAIN_LENGTH, NUM_FRACTIONAL_POSITIONS
-from src.data.loader import load_strategyqa, format_strategyqa_prompt, parse_strategyqa_answer
+from src.data.loader import (
+    load_strategyqa, format_strategyqa_prompt, parse_strategyqa_answer,
+    ANSWER_TRIGGER_RE,
+)
 
 
 def get_fractional_positions(chain_length: int, num_positions: int = NUM_FRACTIONAL_POSITIONS) -> List[int]:
@@ -95,15 +98,17 @@ def _prepare_extraction_items(generated_data, tokenizer):
     """For each generated record, locate the answer-token position in tokens, filter by chain length,
     and return a list of dicts ready for batched extraction."""
     items = []
-    trigger_str = "so the answer is "
     for item in generated_data:
         text = item['generated_text']
-        match_idx = text.lower().rfind(trigger_str)
-        if match_idx == -1:
+        # Use the lenient trigger regex (matches "so the answer is", "the answer is",
+        # "Final answer:", "So, the answer is") and take the LAST match — the one
+        # past the few-shot exemplars. The "answer-decision" point is the position
+        # right before the captured "yes"/"no" token.
+        all_matches = list(ANSWER_TRIGGER_RE.finditer(text))
+        if not all_matches:
             continue
-        # Tokenize text up to and including "so the answer is " — this is the prefix whose
-        # final token position is the "answer-decision" point.
-        text_before_answer = text[:match_idx + len(trigger_str)]
+        last = all_matches[-1]
+        text_before_answer = text[:last.start(1)]  # everything up to (but not incl.) "yes"/"no"
         # Tokenize the trimmed prefix exactly once.
         prefix_ids = tokenizer(text_before_answer, return_tensors="pt", add_special_tokens=False)["input_ids"][0]
         answer_token_idx = int(prefix_ids.shape[0])  # number of tokens in the prefix

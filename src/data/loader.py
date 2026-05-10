@@ -40,12 +40,24 @@ def format_bbh_prompt(input_text: str) -> str:
     """Formats prompt for BBH Logical Deduction."""
     return f"{input_text}\nLet me work through the constraints one by one.\n"
 
+# Single regex used for BOTH parsing the answer and locating the trigger token
+# during activation extraction. Order of alternatives matters: more specific
+# patterns first so e.g. "Final answer: Yes" doesn't get split as "answer: yes".
+ANSWER_TRIGGER_RE = re.compile(
+    r"(?i)(?:"
+    r"so\s*,?\s*the\s+answer\s+is\s+"        # "so the answer is", "So, the answer is"
+    r"|final\s+answer\s*:?\s*"               # "Final answer:" / "Final answer "
+    r"|the\s+answer\s+is\s+"                 # bare "the answer is" (no "so")
+    r"|answer\s*:\s*"                        # "Answer: "
+    r")(yes|no)\b"
+)
+
+
 def parse_strategyqa_answer(text: str) -> int:
-    """Parses binary yes/no from output text. Returns 1 for Yes, 0 for No, -1 for invalid."""
-    # Look for "So the answer is Yes." or "So the answer is No."
-    # We can be somewhat flexible but need to be careful.
-    matches = re.findall(r"(?i)so the answer is (yes|no)", text)
+    """Parses binary yes/no from output text. Returns 1 for Yes, 0 for No, -1 for invalid.
+    Accepts the canonical "So the answer is X" plus three observed Qwen variants:
+    "So, the answer is X", bare "the answer is X", and "Final answer: X"."""
+    matches = ANSWER_TRIGGER_RE.findall(text)
     if matches:
-        ans = matches[-1].lower()
-        return 1 if ans == 'yes' else 0
+        return 1 if matches[-1].lower() == 'yes' else 0
     return -1
