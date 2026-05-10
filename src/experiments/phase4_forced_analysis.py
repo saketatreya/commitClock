@@ -73,7 +73,11 @@ def run_phase4(limit=None, batch_size: int = 16):
 
     hf_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        device_map="auto",
+        # "balanced" forces an even split across all visible GPUs. With "auto"
+        # + low_cpu_mem_usage HF was packing as much as possible onto cuda:0
+        # and offloading the rest to CPU, OOM-ing on the first forward when
+        # activations + KV cache pushed cuda:0 past 16 GB.
+        device_map="balanced",
         torch_dtype=torch.float16,
         attn_implementation="sdpa",
     ).eval()

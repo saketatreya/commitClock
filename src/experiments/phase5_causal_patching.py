@@ -180,7 +180,10 @@ def run_phase5(limit=None, batch_size: int = 4):
     hf_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=torch.float16,
-        device_map="auto",
+        # See Phase 4 for the rationale — "balanced" forces an even split
+        # across both T4s, while "auto" + low_cpu_mem_usage packs cuda:0 to
+        # capacity and CPU-offloads the rest, causing OOM on first forward.
+        device_map="balanced",
         attn_implementation="sdpa",
         low_cpu_mem_usage=True,
     ).eval()

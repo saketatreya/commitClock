@@ -236,7 +236,7 @@ def run_phase1_strategyqa(limit=None):
 
     hf_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        device_map="auto",
+        device_map="balanced",
         torch_dtype=torch.float16,
         attn_implementation="sdpa",
     ).eval()
