@@ -128,19 +128,19 @@ def run_phase2():
     print("Training all data...")
     aurocs_a_all = train_probes_for_data(data, 'model_answer')
     aurocs_b_all = train_probes_for_data(data, 'correct_label')
-    if aurocs_a_all is not None:
+    if aurocs_a_all is not None and aurocs_b_all is not None:
         plot_commitment_clock(aurocs_a_all, aurocs_b_all, title_suffix="")
-        
+
     print("Training easy data...")
     aurocs_a_easy = train_probes_for_data(easy_data, 'model_answer')
     aurocs_b_easy = train_probes_for_data(easy_data, 'correct_label')
-    if aurocs_a_easy is not None:
+    if aurocs_a_easy is not None and aurocs_b_easy is not None:
         plot_commitment_clock(aurocs_a_easy, aurocs_b_easy, title_suffix=" - Easy")
-        
+
     print("Training hard data...")
     aurocs_a_hard = train_probes_for_data(hard_data, 'model_answer')
     aurocs_b_hard = train_probes_for_data(hard_data, 'correct_label')
-    if aurocs_a_hard is not None:
+    if aurocs_a_hard is not None and aurocs_b_hard is not None:
         plot_commitment_clock(aurocs_a_hard, aurocs_b_hard, title_suffix=" - Hard")
         
     if aurocs_a_easy is not None and aurocs_a_hard is not None:

@@ -1,4 +1,6 @@
+import gc
 import pickle
+import sys
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -35,18 +37,19 @@ def _resolve_target_token_id(model, correct_label: int):
     return tid
 
 
-def _left_pad_batch(tokenizer, texts, device):
-    """Tokenize a list of strings with left-padding. Returns (input_ids[B,T], last_idx[B])."""
-    enc = tokenizer(texts, return_tensors="pt", padding=True, add_special_tokens=False)
-    input_ids = enc["input_ids"].to(device)
-    attn = enc["attention_mask"].to(device)
-    T = input_ids.shape[1]
-    # With left-padding, the last non-pad position is always T - 1.
-    last_idx = torch.full((input_ids.shape[0],), T - 1, dtype=torch.long, device=device)
-    return input_ids, attn, last_idx
+def _flush(msg):
+    print(msg, flush=True)
+    sys.stdout.flush()
 
 
-def run_phase5(limit=None, batch_size: int = 4):
+def run_phase5(limit=None):
+    """Causal patching, one question at a time. Original Phase 5 was OOM-killed
+    on Kaggle 2x T4 even at batch_size=4 — the killer was system RAM during TL's
+    forward path with padding + attention_mask, not GPU memory. With B=1 there
+    is no padding and no attention_mask handling, which matches the original
+    pre-rewrite code's memory profile while still benefiting from fp16 (1.5-2x
+    over bf16 emulated on Turing). The cache-cond3-once optimization across
+    layers is preserved (1 + L forwards per question, not N*L)."""
     data = load_forced_branches()
     if not data:
         return
@@ -54,23 +57,18 @@ def run_phase5(limit=None, batch_size: int = 4):
     if limit:
         data = data[:limit]
 
+    _flush("Phase 5: loading TransformerLens model...")
     model = load_model()
     num_layers = model.cfg.n_layers
-    device = model.cfg.device
-
-    # Use the model's tokenizer with left-padding for batched extraction.
-    tokenizer = model.tokenizer
-    tokenizer.padding_side = "left"
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    _flush(f"Phase 5: TL loaded. n_layers={num_layers} d_model={model.cfg.d_model}")
 
     results = []
     checkpoint_path = PHASE5_OUT_DIR / "causal_patching.pkl"
     if checkpoint_path.exists():
-        print(f"Found checkpoint at {checkpoint_path}, loading...")
+        _flush(f"Found checkpoint at {checkpoint_path}, loading...")
         with open(checkpoint_path, "rb") as f:
             results = pickle.load(f)
-        print(f"Resuming with {len(results)} previously processed examples.")
+        _flush(f"Resuming with {len(results)} previously processed examples.")
     processed_qids = {r['question_id'] for r in results}
 
     # Pre-filter: must have valid trimmed cond1, cond3, and a resolvable target token.
@@ -94,69 +92,65 @@ def run_phase5(limit=None, batch_size: int = 4):
             "target_token_id": tgt,
         })
 
-    print(f"Phase 5: {len(pending)} questions × {num_layers} layers; running in batches of {batch_size}.")
+    _flush(f"Phase 5: {len(pending)} questions x {num_layers} layers, B=1 (one question per iter)")
 
-    for start in tqdm(range(0, len(pending), batch_size), desc="Causal Patching"):
-        batch = pending[start:start + batch_size]
-        B = len(batch)
+    for q_idx, item in enumerate(tqdm(pending, desc="Causal Patching")):
+        # Tokenize each condition independently — no padding, no attention_mask drama.
+        cond1_tokens = model.to_tokens(item['cond1_text'], prepend_bos=False)  # [1, T1]
+        cond3_tokens = model.to_tokens(item['cond3_text'], prepend_bos=False)  # [1, T3]
+        last_idx_1 = cond1_tokens.shape[1] - 1
+        last_idx_3 = cond3_tokens.shape[1] - 1
+        target_token_id = item['target_token_id']
 
-        cond1_ids, cond1_attn, last_idx_1 = _left_pad_batch(
-            tokenizer, [b['cond1_text'] for b in batch], device
-        )
-        cond3_ids, cond3_attn, last_idx_3 = _left_pad_batch(
-            tokenizer, [b['cond3_text'] for b in batch], device
-        )
-        target_ids = torch.tensor([b['target_token_id'] for b in batch], device=device, dtype=torch.long)
-        row_idx = torch.arange(B, device=device)
-
-        # 1) Clean run on cond1 — need log-prob of target at last_idx_1 per row.
+        # 1) Clean run on cond1 to get baseline log-prob of correct answer.
         with torch.no_grad():
-            clean_logits = model(cond1_ids, attention_mask=cond1_attn)
-            clean_lp_full = torch.nn.functional.log_softmax(
-                clean_logits[row_idx, last_idx_1, :], dim=-1
+            clean_logits = model(cond1_tokens)
+            clean_log_probs = torch.nn.functional.log_softmax(
+                clean_logits[0, last_idx_1, :], dim=0
             )
-            clean_target_lp = clean_lp_full[row_idx, target_ids]  # [B]
+            clean_target_lp = clean_log_probs[target_token_id].item()
+        del clean_logits, clean_log_probs
 
-        # 2) Cache cond3 across all resid_post layers in one batched forward.
+        # 2) Cache cond3 resid_post across all layers in one forward.
         with torch.no_grad():
             _, cache_c3 = model.run_with_cache(
-                cond3_ids,
-                attention_mask=cond3_attn,
+                cond3_tokens,
                 names_filter=lambda n: "resid_post" in n,
             )
 
-        # 3) For each layer, batched patched forward.
-        per_layer_effect = torch.zeros((B, num_layers), dtype=torch.float32)
+        # 3) Per layer: patch h_C1[last_idx_1] := h_C3[last_idx_3] and re-run.
+        layer_effects = []
         for l in range(num_layers):
-            h_C3_l = cache_c3[f"blocks.{l}.hook_resid_post"][row_idx, last_idx_3, :].detach()  # [B, D]
+            h_C3_l = cache_c3[f"blocks.{l}.hook_resid_post"][0, last_idx_3, :].clone()
 
-            def patch_hook(resid_post, hook, _h=h_C3_l, _idx=last_idx_1):
-                resid_post[row_idx, _idx, :] = _h
+            def patch_hook(resid_post, hook, _h=h_C3_l):
+                resid_post[0, last_idx_1, :] = _h
                 return resid_post
 
             with torch.no_grad():
                 patched_logits = model.run_with_hooks(
-                    cond1_ids,
-                    attention_mask=cond1_attn,
+                    cond1_tokens,
                     fwd_hooks=[(f"blocks.{l}.hook_resid_post", patch_hook)],
                 )
-                patched_lp_full = torch.nn.functional.log_softmax(
-                    patched_logits[row_idx, last_idx_1, :], dim=-1
+                patched_log_probs = torch.nn.functional.log_softmax(
+                    patched_logits[0, last_idx_1, :], dim=0
                 )
-                patched_target_lp = patched_lp_full[row_idx, target_ids]  # [B]
-            per_layer_effect[:, l] = (patched_target_lp - clean_target_lp).cpu()
+                patched_target_lp = patched_log_probs[target_token_id].item()
+            layer_effects.append(patched_target_lp - clean_target_lp)
+            del patched_logits, patched_log_probs
 
-        del cache_c3, clean_logits, cond1_ids, cond1_attn, cond3_ids, cond3_attn
+        del cache_c3, cond1_tokens, cond3_tokens
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        gc.collect()
 
-        for b, item in enumerate(batch):
-            results.append({
-                "question_id": item['q_id'],
-                "effects": per_layer_effect[b].tolist(),
-            })
+        results.append({
+            "question_id": item['q_id'],
+            "effects": layer_effects,
+        })
 
-        if len(results) % 50 == 0:
+        # Save checkpoint frequently so an OOM kill doesn't lose all progress.
+        if (q_idx + 1) % 25 == 0 or q_idx == len(pending) - 1:
             with open(checkpoint_path, "wb") as f:
                 pickle.dump(results, f)
 
@@ -175,7 +169,7 @@ def run_phase5(limit=None, batch_size: int = 4):
         plt.savefig(PHASE5_OUT_DIR / "causal_effect.png")
         plt.close()
 
-    print(f"Phase 5 complete. Evaluated {len(results)} questions.")
+    _flush(f"Phase 5 complete. Evaluated {len(results)} questions.")
 
 
 if __name__ == "__main__":
