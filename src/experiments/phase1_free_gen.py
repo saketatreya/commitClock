@@ -1,3 +1,5 @@
+import gc
+
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -10,6 +12,31 @@ from src.data.loader import (
     load_strategyqa, format_strategyqa_prompt, parse_strategyqa_answer,
     ANSWER_TRIGGER_RE,
 )
+
+
+def _free_model_and_report(model, tag=""):
+    """Release a model's GPU memory and print a before/after VRAM snapshot.
+
+    Without this, `del hf_model` at function exit doesn't immediately free
+    GPU memory — Python's GC may defer destruction, and PyTorch's caching
+    allocator holds blocks even after destruction until `empty_cache()`.
+    The next phase then loads another 7B copy on top, causing OOM. (See
+    Phase 5 entry diagnostics: cuda:0 still showed 6.69 GB allocated from
+    the previous phase before Phase 5 even tried to load anything.)"""
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            print(f"  [free/{tag}] before  cuda:{i} alloc="
+                  f"{torch.cuda.memory_allocated(i)/1e9:.2f}GB  "
+                  f"reserved={torch.cuda.memory_reserved(i)/1e9:.2f}GB", flush=True)
+    del model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        for i in range(torch.cuda.device_count()):
+            print(f"  [free/{tag}] after   cuda:{i} alloc="
+                  f"{torch.cuda.memory_allocated(i)/1e9:.2f}GB  "
+                  f"reserved={torch.cuda.memory_reserved(i)/1e9:.2f}GB", flush=True)
 
 
 def get_fractional_positions(chain_length: int, num_positions: int = NUM_FRACTIONAL_POSITIONS) -> List[int]:
@@ -246,6 +273,9 @@ def run_phase1_strategyqa(limit=None):
 
     print("\n--- Step 2: Batched Activation Extraction (HF output_hidden_states) ---")
     _extract_activations(hf_model, tokenizer, generated_data)
+
+    print("\n--- Phase 1 cleanup: releasing HF model ---")
+    _free_model_and_report(hf_model, tag="phase1")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import gc
 import pickle
 import torch
 from tqdm import tqdm
@@ -5,6 +6,24 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.config import MODEL_NAME, PHASE3_OUT_DIR, PHASE4_OUT_DIR
 from src.data.loader import ANSWER_TRIGGER_RE
+
+
+def _free_model_and_report(model, tag=""):
+    """See phase1_free_gen for rationale."""
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            print(f"  [free/{tag}] before  cuda:{i} alloc="
+                  f"{torch.cuda.memory_allocated(i)/1e9:.2f}GB  "
+                  f"reserved={torch.cuda.memory_reserved(i)/1e9:.2f}GB", flush=True)
+    del model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        for i in range(torch.cuda.device_count()):
+            print(f"  [free/{tag}] after   cuda:{i} alloc="
+                  f"{torch.cuda.memory_allocated(i)/1e9:.2f}GB  "
+                  f"reserved={torch.cuda.memory_reserved(i)/1e9:.2f}GB", flush=True)
 
 
 def load_forced_branches():
@@ -64,6 +83,17 @@ def run_phase4(limit=None, batch_size: int = 8):
 
     if limit:
         data = data[:limit]
+
+    # Defensive cleanup before model load — Phase 1's HF model may still be
+    # holding GPU memory if it wasn't freed cleanly.
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        for i in range(torch.cuda.device_count()):
+            print(f"  [phase4-pre-load] cuda:{i} alloc="
+                  f"{torch.cuda.memory_allocated(i)/1e9:.2f}GB  "
+                  f"reserved={torch.cuda.memory_reserved(i)/1e9:.2f}GB", flush=True)
 
     print("\n--- Loading HF model (fp16, sdpa) for Phase 4 ---")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, add_bos_token=False)
@@ -162,6 +192,8 @@ def run_phase4(limit=None, batch_size: int = 8):
         pickle.dump(results, f)
 
     print(f"Phase 4 complete. Extracted for {len(results)} questions.")
+    print("\n--- Phase 4 cleanup: releasing HF model ---")
+    _free_model_and_report(hf_model, tag="phase4")
 
 
 if __name__ == "__main__":

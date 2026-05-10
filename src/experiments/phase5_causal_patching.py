@@ -162,7 +162,16 @@ def run_phase5(limit=None, batch_size: int = 4):
     matches the original TL semantics."""
     _stderr("=" * 60)
     _stderr(f"Phase 5 starting  batch_size={batch_size}  limit={limit}")
-    _mem_snapshot("phase5-entry")
+    _mem_snapshot("phase5-entry-raw")
+    # Force-release any leftover state from prior phases before measuring
+    # what's actually available. Without this, Phase 4's HF model can sit
+    # in GPU memory when Phase 5 starts (Python GC + PyTorch caching
+    # allocator both hold references past function return).
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    _mem_snapshot("phase5-entry-cleaned")
 
     data = load_forced_branches()
     if not data:
@@ -339,6 +348,24 @@ def run_phase5(limit=None, batch_size: int = 4):
         plt.close()
 
     _stderr(f"Phase 5 complete. Evaluated {len(results)} questions.")
+
+    # Free the HF model so a chained run_all (or notebook session) gets
+    # clean GPUs back. Mirrors the cleanup at the end of Phase 1 and Phase 4.
+    _stderr("\n--- Phase 5 cleanup: releasing HF model ---")
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            _stderr(f"  [free/phase5] before  cuda:{i} alloc="
+                    f"{torch.cuda.memory_allocated(i)/1e9:.2f}GB  "
+                    f"reserved={torch.cuda.memory_reserved(i)/1e9:.2f}GB")
+    del hf_model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        for i in range(torch.cuda.device_count()):
+            _stderr(f"  [free/phase5] after   cuda:{i} alloc="
+                    f"{torch.cuda.memory_allocated(i)/1e9:.2f}GB  "
+                    f"reserved={torch.cuda.memory_reserved(i)/1e9:.2f}GB")
 
 
 if __name__ == "__main__":
